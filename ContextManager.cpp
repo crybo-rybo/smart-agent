@@ -1,3 +1,7 @@
+/**
+ * @file ContextManager.cpp
+ * @brief Manages file context for the application, including file loading, listing, and content retrieval.
+ */
 #include "ContextManager.h"
 #include <imgui.h>
 #include <filesystem>

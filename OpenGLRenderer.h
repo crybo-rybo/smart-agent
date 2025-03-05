@@ -1,4 +1,9 @@
-#pragma once
+/**
+ * @file OpenGLRenderer.h
+ * @brief Handles OpenGL rendering setup and ImGui integration for the application's graphical interface.
+ */
+#ifndef OPENGL_RENDERER_H
+#define OPENGL_RENDERER_H
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -22,4 +27,6 @@ private:
     
     // OpenGL context version
     const char* glsl_version = "#version 150";
-}; 
+};
+
+#endif // OPENGL_RENDERER_H 

@@ -1,3 +1,7 @@
+/**
+ * @file main.cpp
+ * @brief Entry point for the application, initializes and runs the main application instance.
+ */
 #include "Application.h"
 #include <iostream>
 

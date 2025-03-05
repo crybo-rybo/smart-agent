@@ -1,0 +1,20 @@
+# Ignore the build directory entirely
+build/
+
+# Ignore common generated files
+*.o
+*.a
+*.so
+*.dll
+*.exe
+*.out
+
+# Ignore CMake-generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+
+# Ignore other common temp files
+*.log
+*.tmp

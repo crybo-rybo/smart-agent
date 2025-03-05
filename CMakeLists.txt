@@ -4,6 +4,14 @@ project(FileContextManager)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Set CMake policies
+cmake_policy(SET CMP0135 NEW)
+
+# Silence OpenGL deprecation warnings on macOS
+if(APPLE)
+    add_definitions(-DGL_SILENCE_DEPRECATION)
+endif()
+
 # Find packages
 find_package(OpenGL REQUIRED)
 find_package(glfw3 REQUIRED)
@@ -14,6 +22,7 @@ include(FetchContent)
 FetchContent_Declare(
     json
     URL https://github.com/nlohmann/json/releases/download/v3.11.2/json.tar.xz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(json)
 

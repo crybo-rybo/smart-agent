@@ -1,4 +1,9 @@
-#pragma once
+/**
+ * @file ContextManager.h
+ * @brief Manages file context for the application, including file loading, listing, and content retrieval.
+ */
+#ifndef CONTEXT_MANAGER_H
+#define CONTEXT_MANAGER_H
 
 #include <vector>
 #include <string>
@@ -27,3 +32,5 @@ private:
     std::vector<std::string> files;
     std::vector<std::string> fileNames;
 };
+
+#endif // CONTEXT_MANAGER_H

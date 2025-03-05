@@ -1,8 +1,9 @@
 /**
  * @file Application.h
- * @brief Declares the Application class for managing the main application lifecycle.
+ * @brief Manages the main application lifecycle, including window management, LLM interaction, and UI rendering.
  */
-#pragma once
+#ifndef APPLICATION_H
+#define APPLICATION_H
 
 #include "OpenGLRenderer.h"
 #include "ContextManager.h"
@@ -73,3 +74,5 @@ private:
     bool isShuttingDown = false;
     bool showShutdownWindow = false;
 };
+
+#endif // APPLICATION_H

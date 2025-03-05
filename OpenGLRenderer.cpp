@@ -1,3 +1,7 @@
+/**
+ * @file OpenGLRenderer.cpp
+ * @brief Handles OpenGL rendering setup and ImGui integration for the application's graphical interface.
+ */
 #include "OpenGLRenderer.h"
 #include <stdexcept>
 #include <iostream>
@@ -25,7 +29,7 @@ void OpenGLRenderer::initImGui() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     
-    // Setup Dear ImGui style
+    // Setup dark theme for Dear ImGui
     ImGui::StyleColorsDark();
     
     // Setup Platform/Renderer backends

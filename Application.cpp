@@ -1,3 +1,7 @@
+/**
+ * @file Application.cpp
+ * @brief Manages the main application lifecycle, including window management, LLM interaction, and UI rendering.
+ */
 #include "Application.h"
 #include <stdexcept>
 #include <iostream>
@@ -14,10 +18,6 @@
 
 using json = nlohmann::json;
 
-/**
- * @file Application.cpp
- * @brief Implements the Application class for managing the main application lifecycle.
- */
 
 // Callback function for CURL to write response data
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* s) {
