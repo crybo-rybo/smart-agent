@@ -1,7 +1,8 @@
-cmake_minimum_required(VERSION 3.10)
-project(FileContextManager)
+cmake_minimum_required(VERSION 3.15)
+project(SmartAgent)
+set(TARGET smart-agent)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Set CMake policies
@@ -38,11 +39,16 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
 )
 
+# Add llama.cpp as a subdirectory to build its library
+add_subdirectory(external/llama.cpp)
+
 # Application source files
 set(SOURCES
     main.cpp
     Application.cpp
-    OpenGLRenderer.cpp
+    ./gui/OpenGLRenderer.cpp
+    ./llm-interface/ModelInterface.cpp
+    ./llm-interface/ModelManager.cpp
     ContextManager.cpp
     Logger.cpp
 )
@@ -60,27 +66,28 @@ else()
 endif()
 
 # Create executable
-add_executable(${PROJECT_NAME} ${SOURCES} ${IMGUI_SOURCES})
+add_executable(${TARGET} ${SOURCES} ${IMGUI_SOURCES})
 
 # Include directories
-target_include_directories(${PROJECT_NAME} PRIVATE
+target_include_directories(${TARGET} PRIVATE
+    ./llm-interface
+    ./gui
     ${OPENGL_INCLUDE_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${CURL_INCLUDE_DIRS}
 )
 
+# Installation
+install(TARGETS ${TARGET} RUNTIME) 
+
 # Link libraries
-target_link_libraries(${PROJECT_NAME} PRIVATE
+target_link_libraries(${TARGET} PRIVATE
     ${OPENGL_LIBRARIES}
     glfw
     ${PLATFORM_LIBS}
     ${CURL_LIBRARIES}
     nlohmann_json::nlohmann_json
+    llama
+    ${CMAKE_THREAD_LIBS_INIT}
 )
-
-# Copy shader files if needed
-# file(COPY ${CMAKE_SOURCE_DIR}/shaders DESTINATION ${CMAKE_BINARY_DIR})
-
-# Installation
-install(TARGETS ${PROJECT_NAME} DESTINATION bin) 

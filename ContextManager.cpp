@@ -21,6 +21,8 @@ ContextManager::ContextManager() {
         throw std::runtime_error("Failed to initialize GTK");
     }
 #endif
+    // Initialize callback as empty
+    onFileAddedCallback = nullptr;
 }
 
 ContextManager::~ContextManager() {
@@ -61,6 +63,11 @@ void ContextManager::render() {
 void ContextManager::addFile(const std::string& filePath) {
     files.push_back(filePath);
     fileNames.push_back(getFileNameFromPath(filePath));
+    
+    // Notify callback if set
+    if (onFileAddedCallback) {
+        onFileAddedCallback(filePath);
+    }
 }
 
 void ContextManager::removeFile(size_t index) {
@@ -73,6 +80,10 @@ void ContextManager::removeFile(size_t index) {
 void ContextManager::clearAll() {
     files.clear();
     fileNames.clear();
+}
+
+void ContextManager::setOnFileAddedCallback(FileChangeCallback callback) {
+    onFileAddedCallback = callback;
 }
 
 std::string ContextManager::getFileNameFromPath(const std::string& filePath) {

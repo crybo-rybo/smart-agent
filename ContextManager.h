@@ -11,6 +11,9 @@
 
 class ContextManager {
 public:
+    // Define a callback type for file changes
+    using FileChangeCallback = std::function<void(const std::string&)>;
+    
     ContextManager();
     ~ContextManager();
     
@@ -26,11 +29,15 @@ public:
     std::string getFileContents(const std::string& filePath) const;
     std::string getAllFilesContents() const;
     
+    // Set callback for file changes
+    void setOnFileAddedCallback(FileChangeCallback callback);
+    
 private:
     std::string getFileNameFromPath(const std::string& filePath);
     
     std::vector<std::string> files;
     std::vector<std::string> fileNames;
+    FileChangeCallback onFileAddedCallback;
 };
 
 #endif // CONTEXT_MANAGER_H

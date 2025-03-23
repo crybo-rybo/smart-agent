@@ -3,7 +3,10 @@
  * @brief Entry point for the application, initializes and runs the main application instance.
  */
 #include "Application.h"
+#include "ModelManager.h"
 #include <iostream>
+#include <vector>
+#include <string>
 
 int main() {
     try {

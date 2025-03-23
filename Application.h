@@ -7,6 +7,8 @@
 
 #include "OpenGLRenderer.h"
 #include "ContextManager.h"
+#include "ModelManager.h"
+#include "ModelInterface.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -39,13 +41,22 @@ private:
     void stopLLM();
     void sendPrompt(const std::string& prompt, bool keepAlive = true);
     void streamLLMResponse(const std::string& llmName, const std::string& prompt, bool keepAlive = true);
+    
+    // Method to handle file additions to the context
+    void handleFileAdded(const std::string& filePath);
 
     GLFWwindow* window;
     std::unique_ptr<OpenGLRenderer> renderer;
     std::unique_ptr<ContextManager> contextManager;
-    
-    const int WIDTH = 800;
-    const int HEIGHT = 600;
+
+    //
+    ///
+    //
+    ModelManager* m_modelManager;
+    ModelInterface* m_currentModelInterface;
+
+    const int WIDTH = 1000;
+    const int HEIGHT = 800;
     const std::string APP_NAME = "Smart Agent";
 
     // Store LLM information

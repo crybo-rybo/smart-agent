@@ -15,9 +15,12 @@
 #include <atomic>
 #include <condition_variable>
 #include <chrono>
+#include <unistd.h>
+#include <fcntl.h>
 
 using json = nlohmann::json;
 
+const std::string MODELS_DIR = "/Users/conorrybacki/.models/";
 
 // Callback function for CURL to write response data
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* s) {
@@ -35,6 +38,8 @@ Application::Application() : window(nullptr) {
     initOpenGL();
     initImGui();
     contextManager = std::make_unique<ContextManager>();
+    m_modelManager = ModelManager::getInstance();
+    m_modelManager->setModelDirectory(MODELS_DIR);
     fetchLLMs();
     
     // Initialize CURL
@@ -66,330 +71,142 @@ Application::~Application() {
     curl_global_cleanup();
 }
 
-void Application::fetchLLMs() {
-    // Execute the "ollama list" command and capture its output
-    std::array<char, 128> buffer;
-    std::string result;
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen("ollama list", "r"), pclose);
-    if (!pipe) {
-        throw std::runtime_error("Failed to run ollama list command");
-    }
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result += buffer.data();
-    }
-
-    // Parse the output to extract LLM name and size
-    std::istringstream stream(result);
-    std::string line;
-    // Skip header line
-    std::getline(stream, line);
-    
-    while (std::getline(stream, line)) {
-        std::istringstream lineStream(line);
-        std::string name, tag, size;
-        
-        // Format is: NAME TAG SIZE MODIFIED
-        if (lineStream >> name >> tag >> size) {
-            llms.emplace_back(name, size);
-        }
-    }
+void Application::fetchLLMs() 
+{
+  auto fetchResp = m_modelManager->fetchModels();
+  if(fetchResp.has_value())
+  {
+      for(const auto& mod : fetchResp.value())
+      {
+          llms.emplace_back(mod);
+      }
+  }
+  else
+  {
+    std::cout << "Error fetching model names!" << std::endl;
+  }
 }
 
-void Application::startLLM(const std::string& llmName) {
-    if (isLLMRunning) {
-        stopLLM();
-    }
-    
-    // Check if Ollama server is running
-    CURL* curl = curl_easy_init();
-    if (curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, "http://localhost:11434/api/tags");
-        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-        CURLcode res = curl_easy_perform(curl);
-        curl_easy_cleanup(curl);
-        
-        if (res != CURLE_OK) {
-            std::cerr << "Error: Ollama server not running at localhost:11434" << std::endl;
-            return;
-        }
-    }
-    
+void Application::startLLM(const std::string& llmName) 
+{
+  // Start the model specified by the name selected - note this call will
+  // handle appending model directory path and ".gguf" to model name
+  auto loadResp = m_modelManager->loadModel(llmName);
+  if(loadResp.has_value())
+  {
+    m_currentModelInterface = loadResp.value();
     currentLLM = llmName;
     isLLMRunning = true;
     showPromptWindow = true;
-    
-    // Reset conversation
-    conversationHistory = "";
-    
-    // Send an empty prompt to load the LLM into memory
-    std::cout << "Loading " << llmName << " into memory..." << std::endl;
-    
-    // Use a separate thread to avoid blocking the UI
-    std::thread([this, llmName]() {
-        try {
-            // Create a temporary file for the JSON request
-            std::string tempRequestFile = "/tmp/ollama_request.json";
-            
-            // Create a minimal JSON payload just to load the model
-            json payload = {
-                {"model", llmName},
-                {"prompt", " "}, // Use a space instead of empty string to ensure it loads
-                {"stream", false}
-            };
-            
-            // Write the payload to the temp file
-            std::ofstream requestFile(tempRequestFile);
-            if (!requestFile.is_open()) {
-                std::cerr << "Failed to open temp request file" << std::endl;
-                return;
-            }
-            requestFile << payload.dump();
-            requestFile.close();
-            
-            // Build the curl command
-            std::string curlCmd = "curl -s -X POST -H \"Content-Type: application/json\" -d @" + 
-                                 tempRequestFile + " http://localhost:11434/api/generate";
-            
-            std::cout << "Executing load command: " << curlCmd << std::endl;
-            
-            // Execute the command
-            int result = system(curlCmd.c_str());
-            if (result != 0) {
-                std::cerr << "Failed to load model, error code: " << result << std::endl;
-            } else {
-                std::cout << llmName << " loaded successfully" << std::endl;
-            }
-            
-            // Clean up temp file
-            std::remove(tempRequestFile.c_str());
-            
-        } catch (const std::exception& e) {
-            std::cerr << "Exception in model loading: " << e.what() << std::endl;
-        }
+  }
+  else
+  {
+    #ifdef _DEBUG
+      std::cout << "Error loading model : " << llmName << std::endl;
+    #endif
+  }
+}
+
+void Application::stopLLM() 
+{
+  isLLMRunning = false;
+  m_modelManager->unloadModel();
+  m_currentModelInterface = nullptr;
+  currentLLM = "";
+  showPromptWindow = false;
+}
+
+void Application::sendPrompt(const std::string& prompt, bool keepAlive) 
+{
+    #ifdef _DEBUG
+      std::cout << "Application::sendPrompt entered with prompt : " << prompt << std::endl;
+    #endif
+
+    // Add the prompt to the chat history
+    {
+        std::lock_guard<std::mutex> gLock(responseMutex);
+        conversationHistory += "User: ";
+        conversationHistory += prompt;
+        conversationHistory += "\n";
+    }
+
+    // In an async thread - send the prompt to the LLM and stream the response
+    std::thread([this, prompt, keepAlive]() {
+      streamLLMResponse(currentLLM, prompt, keepAlive);
     }).detach();
 }
 
-void Application::stopLLM() {
-    if (isLLMRunning) {
-        stopRequested = true;
-        if (llmFuture.valid()) {
-            llmFuture.wait();
-        }
+void Application::streamLLMResponse(const std::string& llmName, const std::string& prompt, bool keepAlive)
+{
+    #ifdef _DEBUG
+      std::cout << "Application::streamLLMResponse entered with llmName : " << llmName << " and prompt : " << prompt << std::endl;
+    #endif
+    int pipeFd[2]; // 0 -> read end, 1 -> write end
 
-        // send an empty prompt to unload the LLM from memory with the 'keep_alive' attribute set
-        // to 0 to force it to unload
-        sendPrompt("", false);
-
-        isLLMRunning = false;
-        currentLLM = "";
-        stopRequested = false;
-        isWaitingForResponse = false; // Reset waiting flag
-        
-        // Close the Prompt window when stopping the LLM
-        showPromptWindow = false;
+    // Create the pipe
+    if(pipe(pipeFd) == -1)
+    {
+        #ifdef _DEBUG
+            std::cout << "Pipe creation failed..." << std::endl;
+        #endif
+        return;
     }
-}
 
-void Application::sendPrompt(const std::string& prompt, bool keepAlive) {
-    try {
-        if (!isLLMRunning) return;
-        
-        // Set waiting flag to true (only for non-empty prompts)
-        if (!prompt.empty()) {
-            isWaitingForResponse = true;
-            
-            // Add user prompt to conversation history
-            std::string userMessage = "User: " + prompt + "\n";
+    // Make read end of the pipe non blocking
+    if(fcntl(pipeFd[0], F_SETFL, O_NONBLOCK) == -1)
+    {
+        #ifdef _DEBUG
+            std::cout << "Failed to set pipe read non-blocking..." << std::endl;
+        #endif
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> gLock(responseMutex);
+        conversationHistory += llmName + ": ";
+    }
+    // Send the prompt and generate the response in a separate thread, passing it the pipe FD
+    // for writing
+    int writeFd = pipeFd[1];
+    std::thread modelThread([this, prompt, writeFd]()
+    {
+        m_currentModelInterface->sendPrompt(writeFd, prompt, "User");
+    });
+    char buffer;
+    while(true)
+    {
+        ssize_t bytesRead = read(pipeFd[0], &buffer, 1);
+        if(bytesRead > 0)
+        {
+            // add the character to the response
             {
-                std::lock_guard<std::mutex> lock(responseMutex);
-                conversationHistory += userMessage;
+                std::lock_guard<std::mutex> gLock(responseMutex);
+                conversationHistory += buffer;
             }
         }
-        
-        // Get file context (only for non-empty prompts)
-        std::string fileContext;
-        std::string combinedPrompt = prompt;
-        
-        if (!prompt.empty()) {
-            fileContext = contextManager->getAllFilesContents();
-            
-            // Create a combined prompt with file context
-            if (!fileContext.empty()) {
-                combinedPrompt = "I have the following files in my context:\n\n" + 
-                                fileContext + 
-                                "\n\nBased on these files, please answer the following question:\n" + 
-                                prompt;
-            }
+        else if(bytesRead == -1 && errno == EAGAIN)
+        {
+            // Because we are non-blocking there is nothing in buffer - wait a little
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
         }
-        
-        if (!prompt.empty()) {
-            std::cout << "Sending prompt to " << currentLLM << " with file context" << std::endl;
-        } else {
-            std::cout << "Sending control message to " << currentLLM << " (keep_alive=" << keepAlive << ")" << std::endl;
+        else if(bytesRead == 0)
+        {
+            // Pipe closed by child - end of response
+            break;
         }
-        
-        // Start streaming response in a separate thread
-        stopRequested = false;
-        
-        // Use a safer approach to launch the async task
-        try {
-            llmFuture = std::async(std::launch::async, 
-                [this, llm = currentLLM, p = combinedPrompt, ka = keepAlive]() {
-                    try {
-                        this->streamLLMResponse(llm, p, ka);
-                    } catch (const std::exception& e) {
-                        std::cerr << "Exception in async task: " << e.what() << std::endl;
-                    }
-                    // Set waiting flag to false when done (only for non-empty prompts)
-                    if (!p.empty()) {
-                        this->isWaitingForResponse = false;
-                    }
-                });
-        } catch (const std::exception& e) {
-            std::cerr << "Failed to launch async task: " << e.what() << std::endl;
-            if (!prompt.empty()) {
-                isWaitingForResponse = false; // Reset waiting flag
-            }
-        }
-    } catch (const std::exception& e) {
-        std::cerr << "Exception in sendPrompt: " << e.what() << std::endl;
-        if (!prompt.empty()) {
-            isWaitingForResponse = false; // Reset waiting flag
+        else
+        {
+            // Some Error Occured...
+            #ifdef _DEBUG
+                std::cout << "Error reading response buffer..." << std::endl;
+            #endif
+            break;
         }
     }
-}
 
-void Application::streamLLMResponse(const std::string& llmName, const std::string& prompt, bool keepAlive) {
-    try {
-        // Create a temporary file for the JSON request
-        std::string tempRequestFile = "/tmp/ollama_request.json";
-        
-        // Create the JSON payload with keep_alive attribute
-        json payload = {
-            {"model", llmName},
-            {"prompt", prompt},
-            {"stream", true},  // Enable streaming mode
-        };
-
-        // Only add keep_alive if it is NOT 0
-        if (!keepAlive) {
-            payload["keep_alive"] = 0;
-        }
-        
-        // Write the payload to the temp file
-        std::ofstream requestFile(tempRequestFile);
-        if (!requestFile.is_open()) {
-            std::cerr << "Failed to open temp request file" << std::endl;
-            return;
-        }
-        requestFile << payload.dump();
-        requestFile.close();
-        
-        // Build the curl command with streaming output and disable buffering
-        std::string curlCmd = "curl -N -s -X POST -H \"Content-Type: application/json\" -d @" + 
-                             tempRequestFile + " http://localhost:11434/api/generate";
-        
-        std::cout << "Executing streaming command: " << curlCmd << std::endl;
-        
-        // For empty prompts (control messages), we don't need to process the response
-        if (prompt.empty()) {
-            // Just execute the command and return
-            int result = system(curlCmd.c_str());
-            if (result != 0) {
-                std::cerr << "Failed to execute curl command, error code: " << result << std::endl;
-            }
-            std::remove(tempRequestFile.c_str());
-            return;
-        }
-        
-        // Open a pipe to read the output in real-time with line buffering
-        FILE* pipe = popen(curlCmd.c_str(), "r");
-        if (!pipe) {
-            std::cerr << "Failed to open pipe for curl command" << std::endl;
-            std::remove(tempRequestFile.c_str());
-            return;
-        }
-        
-        // Disable buffering on the pipe
-        setvbuf(pipe, NULL, _IONBF, 0);
-        
-        // Add LLM prefix to conversation history (in a thread-safe way)
-        {
-            std::lock_guard<std::mutex> lock(responseMutex);
-            conversationHistory += llmName + ": ";
-            
-            // Signal that UI needs update
-            uiNeedsUpdate = true;
-        }
-        
-        // Read the output character by character
-        char c;
-        std::string currentLine;
-        std::string accumulatedChunks;
-        int chunkCounter = 0;
-        
-        while (!stopRequested && (c = fgetc(pipe)) != EOF) {
-            if (c == '\n') {
-                // Process complete line
-                if (!currentLine.empty()) {
-                    try {
-                        auto response = json::parse(currentLine);
-                        
-                        if (response.contains("response") && response["response"].is_string()) {
-                            std::string chunk = response["response"].get<std::string>();
-                            accumulatedChunks += chunk;
-                            chunkCounter++;
-                            
-                            // Update UI less frequently to reduce blocking
-                            if (chunkCounter >= 5) {
-                                // Update conversation history with accumulated chunks
-                                std::lock_guard<std::mutex> lock(responseMutex);
-                                conversationHistory += accumulatedChunks;
-                                accumulatedChunks.clear();
-                                chunkCounter = 0;
-                                
-                                // Signal that UI needs update
-                                uiNeedsUpdate = true;
-                            }
-                        }
-                        
-                        // Check if this is the done message
-                        if (response.contains("done") && response["done"].get<bool>()) {
-                            // Make sure to add any remaining chunks
-                            if (!accumulatedChunks.empty()) {
-                                std::lock_guard<std::mutex> lock(responseMutex);
-                                conversationHistory += accumulatedChunks;
-                                uiNeedsUpdate = true;
-                            }
-                            break;
-                        }
-                    } catch (const std::exception& e) {
-                        // Ignore parsing errors for incomplete lines
-                    }
-                }
-                currentLine.clear();
-            } else {
-                currentLine += c;
-            }
-            
-            // Sleep less to process chunks faster
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        
-        // Add newline after complete response
-        {
-            std::lock_guard<std::mutex> lock(responseMutex);
-            conversationHistory += "\n\n";
-            uiNeedsUpdate = true;
-        }
-        
-        // Close the pipe and clean up
-        pclose(pipe);
-        std::remove(tempRequestFile.c_str());
-        
-    } catch (const std::exception& e) {
-        std::cerr << "Exception in streamLLMResponse: " << e.what() << std::endl;
-    }
+    // Clean up pipe and join the child
+    close(pipeFd[0]);
+    modelThread.join();
 }
 
 void Application::initWindow() {
