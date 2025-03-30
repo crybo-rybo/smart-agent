@@ -138,6 +138,7 @@ void Application::sendPrompt(const std::string& prompt, bool keepAlive)
 
 void Application::streamLLMResponse(const std::string& llmName, const std::string& prompt, bool keepAlive)
 {
+    isWaitingForResponse = true;
     #ifdef _DEBUG
       std::cout << "Application::streamLLMResponse entered with llmName : " << llmName << " and prompt : " << prompt << std::endl;
     #endif
@@ -207,6 +208,7 @@ void Application::streamLLMResponse(const std::string& llmName, const std::strin
     // Clean up pipe and join the child
     close(pipeFd[0]);
     modelThread.join();
+    isWaitingForResponse = false;
 }
 
 void Application::initWindow() {

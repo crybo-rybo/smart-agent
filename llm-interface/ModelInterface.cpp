@@ -223,4 +223,6 @@ void ModelInterface::generateResponse(const int writeFd, const std::string& fPro
       // Prepare the next batch with the sampled token
       batch = llama_batch_get_one(&newTokenId, 1);
    }
+
+   close(writeFd); // close the pipe
 }
