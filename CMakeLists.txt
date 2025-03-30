@@ -50,7 +50,6 @@ set(SOURCES
     ./llm-interface/ModelInterface.cpp
     ./llm-interface/ModelManager.cpp
     ContextManager.cpp
-    Logger.cpp
 )
 
 # Platform-specific dependencies
