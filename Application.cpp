@@ -6,71 +6,53 @@
 #include <stdexcept>
 #include <iostream>
 #include <sstream>
-#include <array>
-#include <cstdio>
-#include <curl/curl.h>
-#include <nlohmann/json.hpp>
 #include <fstream>
 #include <thread>
-#include <atomic>
-#include <condition_variable>
 #include <chrono>
 #include <unistd.h>
 #include <fcntl.h>
-
-using json = nlohmann::json;
+#include <filesystem>
 
 const std::string MODELS_DIR = "/Users/conorrybacki/.models/";
 
-// Callback function for CURL to write response data
-size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* s) {
-    size_t newLength = size * nmemb;
-    try {
-        s->append((char*)contents, newLength);
-        return newLength;
-    } catch(std::bad_alloc& e) {
-        return 0;
-    }
-}
-
-Application::Application() : window(nullptr) {
+/**
+ * @brief Constructor for the Application class
+ * 
+ * Initializes the application window, OpenGL renderer, ImGui, and loads available models
+ */
+Application::Application() : 
+m_window(nullptr),
+m_renderer(nullptr),
+m_contextManager(nullptr),
+m_modelManager(nullptr) 
+{
     initWindow();
     initOpenGL();
     initImGui();
-    contextManager = std::make_unique<ContextManager>();
+    m_contextManager = std::make_unique<ContextManager>();
     m_modelManager = ModelManager::getInstance();
     m_modelManager->setModelDirectory(MODELS_DIR);
     fetchLLMs();
-    
-    // Initialize CURL
-    curl_global_init(CURL_GLOBAL_ALL);
 }
 
+/**
+ * @brief Destructor for the Application class
+ * 
+ * Ensures any running LLM is properly stopped before application shutdown
+ */
 Application::~Application() {
-    // Make sure to stop any running LLM
-    if (isLLMRunning) {
-        // If we're not already in the shutdown process, show the shutdown window
-        if (!isShuttingDown) {
-            isShuttingDown = true;
-            showShutdownWindow = true;
-            
-            // Create a temporary window for shutdown
-            GLFWwindow* tempWindow = window;
-            
-            // Draw the shutdown window at least once
-            renderer->beginFrame();
-            drawShutdownWindow();
-            renderer->endFrame();
-            
-            // Stop the LLM
-            stopLLM();
-        }
-    }
-    
-    // Clean up CURL
-    curl_global_cleanup();
+  // Make sure to stop any running LLM
+  if (m_isLLMRunning) 
+  {
+    stopLLM();
+  }
 }
 
+/**
+ * @brief Fetch available LLM models
+ * 
+ * Queries the ModelManager to get a list of all available LLM models
+ */
 void Application::fetchLLMs() 
 {
   auto fetchResp = m_modelManager->fetchModels();
@@ -78,7 +60,7 @@ void Application::fetchLLMs()
   {
       for(const auto& mod : fetchResp.value())
       {
-          llms.emplace_back(mod);
+          m_llms.emplace_back(mod);
       }
   }
   else
@@ -87,6 +69,13 @@ void Application::fetchLLMs()
   }
 }
 
+/**
+ * @brief Start a specific LLM model
+ * 
+ * @param llmName The name of the LLM model to start
+ * 
+ * Loads and initializes the specified LLM model for use
+ */
 void Application::startLLM(const std::string& llmName) 
 {
   // Start the model specified by the name selected - note this call will
@@ -95,9 +84,9 @@ void Application::startLLM(const std::string& llmName)
   if(loadResp.has_value())
   {
     m_currentModelInterface = loadResp.value();
-    currentLLM = llmName;
-    isLLMRunning = true;
-    showPromptWindow = true;
+    m_currentLLM = llmName;
+    m_isLLMRunning = true;
+    m_showPromptWindow = true;
   }
   else
   {
@@ -107,15 +96,30 @@ void Application::startLLM(const std::string& llmName)
   }
 }
 
+/**
+ * @brief Stop the currently running LLM model
+ * 
+ * Unloads the current model and cleans up resources
+ */
 void Application::stopLLM() 
 {
-  isLLMRunning = false;
-  m_modelManager->unloadModel();
-  m_currentModelInterface = nullptr;
-  currentLLM = "";
-  showPromptWindow = false;
+  if(m_isLLMRunning)
+  {
+    m_modelManager->unloadModel();
+    m_currentModelInterface = nullptr;
+    m_currentLLM = "";
+    m_isLLMRunning = false;
+  }
 }
 
+/**
+ * @brief Send a prompt to the currently running LLM
+ * 
+ * @param prompt The text prompt to send to the LLM
+ * @param keepAlive Whether to keep the LLM loaded after processing the prompt (default: true)
+ * 
+ * Sends the user's prompt to the LLM and initiates response streaming
+ */
 void Application::sendPrompt(const std::string& prompt, bool keepAlive) 
 {
     #ifdef _DEBUG
@@ -124,21 +128,30 @@ void Application::sendPrompt(const std::string& prompt, bool keepAlive)
 
     // Add the prompt to the chat history
     {
-        std::lock_guard<std::mutex> gLock(responseMutex);
-        conversationHistory += "User: ";
-        conversationHistory += prompt;
-        conversationHistory += "\n";
+        std::lock_guard<std::mutex> gLock(m_responseMutex);
+        m_conversationHistory += "User: ";
+        m_conversationHistory += prompt;
+        m_conversationHistory += "\n";
     }
 
     // In an async thread - send the prompt to the LLM and stream the response
     std::thread([this, prompt, keepAlive]() {
-      streamLLMResponse(currentLLM, prompt, keepAlive);
+      streamLLMResponse(m_currentLLM, prompt, keepAlive);
     }).detach();
 }
 
+/**
+ * @brief Stream the LLM's response to a prompt
+ * 
+ * @param llmName The name of the LLM model generating the response
+ * @param prompt The text prompt sent to the LLM
+ * @param keepAlive Whether to keep the LLM loaded after processing (default: true)
+ * 
+ * Handles the streaming of tokens from the LLM's response, updating the UI in real-time
+ */
 void Application::streamLLMResponse(const std::string& llmName, const std::string& prompt, bool keepAlive)
 {
-    isWaitingForResponse = true;
+    m_isWaitingForResponse = true;
     #ifdef _DEBUG
       std::cout << "Application::streamLLMResponse entered with llmName : " << llmName << " and prompt : " << prompt << std::endl;
     #endif
@@ -162,8 +175,8 @@ void Application::streamLLMResponse(const std::string& llmName, const std::strin
         return;
     }
     {
-        std::lock_guard<std::mutex> gLock(responseMutex);
-        conversationHistory += llmName + ": ";
+        std::lock_guard<std::mutex> gLock(m_responseMutex);
+        m_conversationHistory += llmName + ": ";
     }
     // Send the prompt and generate the response in a separate thread, passing it the pipe FD
     // for writing
@@ -180,8 +193,8 @@ void Application::streamLLMResponse(const std::string& llmName, const std::strin
         {
             // add the character to the response
             {
-                std::lock_guard<std::mutex> gLock(responseMutex);
-                conversationHistory += buffer;
+                std::lock_guard<std::mutex> gLock(m_responseMutex);
+                m_conversationHistory += buffer;
             }
         }
         else if(bytesRead == -1 && errno == EAGAIN)
@@ -208,9 +221,14 @@ void Application::streamLLMResponse(const std::string& llmName, const std::strin
     // Clean up pipe and join the child
     close(pipeFd[0]);
     modelThread.join();
-    isWaitingForResponse = false;
+    m_isWaitingForResponse = false;
 }
 
+/**
+ * @brief Initialize the GLFW window
+ * 
+ * Sets up the GLFW window with proper OpenGL context and configuration
+ */
 void Application::initWindow() {
     // Initialize GLFW
     if (!glfwInit()) {
@@ -224,62 +242,83 @@ void Application::initWindow() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
     
     // Create window
-    window = glfwCreateWindow(WIDTH, HEIGHT, APP_NAME.c_str(), nullptr, nullptr);
-    if (!window) {
+    m_window = glfwCreateWindow(m_WIDTH, m_HEIGHT, m_APP_NAME.c_str(), nullptr, nullptr);
+    if (!m_window) {
         glfwTerminate();
         throw std::runtime_error("Failed to create GLFW window");
     }
 }
 
+/**
+ * @brief Initialize the OpenGL renderer
+ * 
+ * Creates and configures the OpenGL renderer with the application window
+ */
 void Application::initOpenGL() {
-    renderer = std::make_unique<OpenGLRenderer>(window, WIDTH, HEIGHT);
+    m_renderer = std::make_unique<OpenGLRenderer>(m_window, m_WIDTH, m_HEIGHT);
 }
 
+/**
+ * @brief Initialize the ImGui UI framework
+ * 
+ * Sets up ImGui for rendering the user interface
+ */
 void Application::initImGui() {
-    renderer->initImGui();
+    m_renderer->initImGui();
 }
 
+/**
+ * @brief Start the application main loop
+ * 
+ * Entry point for running the application after initialization
+ */
 void Application::run() {
     mainLoop();
 }
 
+/**
+ * @brief Main application loop
+ * 
+ * Handles rendering and event processing in a continuous loop,
+ * processes window events, renders UI, and manages shutdown sequences.
+ */
 void Application::mainLoop() {
     // Set a higher frame rate for smoother updates when streaming
     glfwSwapInterval(0); // Disable vsync for more frequent updates
     
-    while (!glfwWindowShouldClose(window) || showShutdownWindow) {
+    while (!glfwWindowShouldClose(m_window) || m_showShutdownWindow) {
         glfwPollEvents();
         
         // Check if the window close button was clicked and we need to start shutdown
-        if (glfwWindowShouldClose(window) && !isShuttingDown && isLLMRunning) {
+        if (glfwWindowShouldClose(m_window) && !m_isShuttingDown && m_isLLMRunning) {
             // Start the shutdown process
-            isShuttingDown = true;
-            showShutdownWindow = true;
+            m_isShuttingDown = true;
+            m_showShutdownWindow = true;
             
             // Stop the LLM in a separate thread to avoid blocking
             std::thread([this]() {
                 this->stopLLM();
-                this->showShutdownWindow = false;
+                this->m_showShutdownWindow = false;
             }).detach();
         }
         
-        renderer->beginFrame();
+        m_renderer->beginFrame();
         
         // Draw the main UI if not shutting down
-        if (!isShuttingDown) {
+        if (!m_isShuttingDown) {
             drawUI();
         }
         
         // Draw the shutdown window if needed
-        if (showShutdownWindow) {
+        if (m_showShutdownWindow) {
             drawShutdownWindow();
         }
         
-        renderer->endFrame();
+        m_renderer->endFrame();
         
         // Sleep based on whether we need to update the UI
-        if (uiNeedsUpdate || showShutdownWindow) {
-            uiNeedsUpdate = false;
+        if (m_uiNeedsUpdate || m_showShutdownWindow) {
+            m_uiNeedsUpdate = false;
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60 FPS
@@ -287,10 +326,16 @@ void Application::mainLoop() {
     }
 }
 
+/**
+ * @brief Draw the application user interface
+ * 
+ * Renders the complete UI including context manager, LLM selector,
+ * and conversation window. Handles all user interactions with the interface.
+ */
 void Application::drawUI() {
     // Set up the main window to cover the entire application window
     ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImVec2(WIDTH, HEIGHT));
+    ImGui::SetNextWindowSize(ImVec2(m_WIDTH, m_HEIGHT));
     
     // Make the main window act as a container only, with no visible elements
     ImGuiWindowFlags mainWindowFlags = 
@@ -305,14 +350,14 @@ void Application::drawUI() {
     
     // Calculate reasonable initial sizes and positions for sub-windows
     float padding = 10.0f;
-    float topWindowHeight = HEIGHT * 0.35f;  // Height for top windows
-    float contextWidth = WIDTH * 0.5f - padding * 1.5f;  // Width for Context window
-    float llmsWidth = WIDTH * 0.5f - padding * 1.5f;     // Width for LLMs window
+    float topWindowHeight = m_HEIGHT * 0.35f;  // Height for top windows
+    float contextWidth = m_WIDTH * 0.5f - padding * 1.5f;  // Width for Context window
+    float llmsWidth = m_WIDTH * 0.5f - padding * 1.5f;     // Width for LLMs window
     
     // Store the initial prompt window position and size for first-time setup
     static bool promptWindowInitialized = false;
     static ImVec2 promptWindowPos(padding, padding + topWindowHeight + padding);
-    static ImVec2 promptWindowSize(WIDTH - padding * 2, HEIGHT - topWindowHeight - padding * 3);
+    static ImVec2 promptWindowSize(m_WIDTH - padding * 2, m_HEIGHT - topWindowHeight - padding * 3);
     
     // Context Manager UI - positioned at the top left
     ImGui::SetNextWindowPos(ImVec2(padding, padding));
@@ -323,19 +368,19 @@ void Application::drawUI() {
     ImGui::Text("Context");
     ImGui::SameLine();
     if (ImGui::Button("+")) {
-        std::string filePath = contextManager->openFileDialog();
+        std::string filePath = m_contextManager->openFileDialog();
         if (!filePath.empty()) {
-            contextManager->addFile(filePath);
+            m_contextManager->addFile(filePath);
         }
     }
     float windowWidth = ImGui::GetWindowWidth();
     float buttonWidth = ImGui::CalcTextSize("Clear All").x + ImGui::GetStyle().FramePadding.x * 2.0f;
     ImGui::SameLine(windowWidth - buttonWidth - ImGui::GetStyle().ItemSpacing.x);
     if (ImGui::Button("Clear All")) {
-        contextManager->clearAll();
+        m_contextManager->clearAll();
     }
     ImGui::Separator();
-    contextManager->renderFileList();
+    m_contextManager->renderFileList();
     ImGui::End(); // End Context window
 
     // LLMs UI - positioned at the top right
@@ -343,15 +388,15 @@ void Application::drawUI() {
     ImGui::SetNextWindowSize(ImVec2(llmsWidth, topWindowHeight));
     
     ImGui::Begin("Installed LLMs", nullptr, windowFlags);
-    for (const auto& llm : llms) {
+    for (const auto& llm : m_llms) {
         ImGui::Text("Name: %s, Size: %s", llm.first.c_str(), llm.second.c_str());
         
         ImGui::SameLine(ImGui::GetWindowWidth() - buttonWidth - ImGui::GetStyle().ItemSpacing.x);
         
         // Show Run/Stop button
-        std::string buttonLabel = (isLLMRunning && currentLLM == llm.first) ? "Stop##" + llm.first : "Run##" + llm.first;
+        std::string buttonLabel = (m_isLLMRunning && m_currentLLM == llm.first) ? "Stop##" + llm.first : "Run##" + llm.first;
         if (ImGui::Button(buttonLabel.c_str())) {
-            if (isLLMRunning && currentLLM == llm.first) {
+            if (m_isLLMRunning && m_currentLLM == llm.first) {
                 stopLLM();
             } else {
                 startLLM(llm.first);
@@ -361,7 +406,7 @@ void Application::drawUI() {
     ImGui::End(); // End LLMs window
 
     // Prompt window - show only when an LLM is running
-    if (showPromptWindow) {
+    if (m_showPromptWindow) {
         // Use a fixed title without the loading indicator
         const char* windowTitle = "Prompt";
         
@@ -382,7 +427,7 @@ void Application::drawUI() {
         ImGuiWindowFlags promptFlags = ImGuiWindowFlags_None | ImGuiWindowFlags_NoFocusOnAppearing;
         
         // Begin the window with fixed title
-        ImGui::Begin(windowTitle, &showPromptWindow, promptFlags);
+        ImGui::Begin(windowTitle, &m_showPromptWindow, promptFlags);
         
         // Save the current position and size only if the user is actively moving/resizing
         if (ImGui::IsWindowFocused() && (ImGui::IsMouseDragging(0) || ImGui::IsMouseDragging(1))) {
@@ -391,7 +436,7 @@ void Application::drawUI() {
         }
         
         // Show loading indicator inside the window instead of in the title
-        if (isWaitingForResponse) {
+        if (m_isWaitingForResponse) {
             static int frame = 0;
             frame = (frame + 1) % 4;
             const char* spinChars[] = {"|", "/", "-", "\\"};
@@ -401,29 +446,44 @@ void Application::drawUI() {
         }
         
         // Show file context status
-        std::vector<std::string> contextFiles = contextManager->getFilePaths();
+        std::vector<std::string> contextFiles = m_contextManager->getFilePaths();
         if (!contextFiles.empty()) {
-            if (isWaitingForResponse) {
+            if (m_isWaitingForResponse) {
                 ImGui::SameLine();
             }
             ImGui::TextColored(ImVec4(0.0f, 0.8f, 0.0f, 1.0f), 
                               "Using %zu file(s) as context", contextFiles.size());
         }
         
-        if (isWaitingForResponse || !contextFiles.empty()) {
+        if (m_isWaitingForResponse || !contextFiles.empty()) {
             ImGui::Separator();
         }
         
         // Calculate the height for the conversation history
         float inputHeight = 30.0f; // Approximate height of input area
-        float statusHeight = (isWaitingForResponse || !contextFiles.empty()) ? 40.0f : 0.0f;
+        float statusHeight = (m_isWaitingForResponse || !contextFiles.empty()) ? 40.0f : 0.0f;
         float historyHeight = ImGui::GetContentRegionAvail().y - inputHeight - statusHeight;
         
         // Display conversation history in a scrollable area
         ImGui::BeginChild("ConversationHistory", ImVec2(0, historyHeight), true);
         {
-            std::lock_guard<std::mutex> lock(responseMutex);
-            ImGui::TextWrapped("%s", conversationHistory.c_str());
+            std::lock_guard<std::mutex> lock(m_responseMutex);
+            // Display the conversation history in Green color
+            std::stringstream ss(m_conversationHistory);
+            std::string line;
+            while(std::getline(ss, line))
+            {
+                if(line.find("User:") != std::string::npos)
+                {
+                    // Color the user history in green
+                    ImGui::TextColored(ImVec4(0.0f, 0.0f, 0.0f, 0.0f), "%s", line.c_str());
+                }
+                else
+                {
+                    // Color the LLM history in light blue color
+                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%s", line.c_str());
+                }
+            }
         }
         
         // Auto-scroll to bottom
@@ -442,9 +502,9 @@ void Application::drawUI() {
         if (ImGui::InputTextWithHint("##prompt", "Enter your prompt here...", 
                                     inputBuffer, IM_ARRAYSIZE(inputBuffer), 
                                     ImGuiInputTextFlags_EnterReturnsTrue)) {
-            userPrompt = inputBuffer;
-            sendPrompt(userPrompt);
-            userPrompt.clear();
+            m_userPrompt = inputBuffer;
+            sendPrompt(m_userPrompt);
+            m_userPrompt.clear();
             inputBuffer[0] = '\0'; // Clear the buffer
         }
         
@@ -452,9 +512,9 @@ void Application::drawUI() {
         
         ImGui::SameLine();
         if (ImGui::Button("Send") && inputBuffer[0] != '\0') {
-            userPrompt = inputBuffer;
-            sendPrompt(userPrompt);
-            userPrompt.clear();
+            m_userPrompt = inputBuffer;
+            sendPrompt(m_userPrompt);
+            m_userPrompt.clear();
             inputBuffer[0] = '\0'; // Clear the buffer
         }
         
@@ -467,9 +527,15 @@ void Application::drawUI() {
     ImGui::End(); // End main container window
 }
 
+/**
+ * @brief Draw the shutdown confirmation window
+ * 
+ * Displays a modal window with an animated loading indicator
+ * while waiting for the LLM to completely shut down.
+ */
 void Application::drawShutdownWindow() {
     // Center the shutdown window on the screen
-    ImVec2 center = ImVec2(WIDTH * 0.5f, HEIGHT * 0.5f);
+    ImVec2 center = ImVec2(m_WIDTH * 0.5f, m_HEIGHT * 0.5f);
     ImVec2 windowSize = ImVec2(300, 100);
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(windowSize);
@@ -496,7 +562,7 @@ void Application::drawShutdownWindow() {
     }
     
     // Create the message with variable dots
-    std::string message = "Waiting for " + currentLLM + " to shut down" + dots;
+    std::string message = "Waiting for " + m_currentLLM + " to shut down" + dots;
     
     // Center the text
     float textWidth = ImGui::CalcTextSize(message.c_str()).x;
@@ -506,4 +572,48 @@ void Application::drawShutdownWindow() {
     ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.0f, 1.0f), "%s", message.c_str());
     
     ImGui::End();
+}
+
+/**
+ * @brief Handle the addition of a file to the context
+ * 
+ * @param filePath The path of the file being added to the context
+ * 
+ * Processes a newly added file and sends its content to the LLM as context.
+ * Adds the file to the current LLM's context when available.
+ */
+void Application::handleFileAdded(const std::string& filePath) {
+    if (!m_isLLMRunning || !m_currentModelInterface) {
+        return; // No LLM running, can't send file
+    }
+    
+    #ifdef _DEBUG
+      std::cout << "File added to context: " << filePath << std::endl;
+    #endif
+    
+    // Get the file content
+    std::string fileContent = m_contextManager->getFileContents(filePath);
+    
+    // Create a prompt that indicates this is just for context
+    std::string fileName = std::filesystem::path(filePath).filename().string();
+    std::string contextPrompt = "File added for context: " + fileName + "\n\n";
+    contextPrompt += fileContent;
+    
+    // Send file to model
+    int pipeFd[2];
+    if(pipe(pipeFd) == -1) {
+        #ifdef _DEBUG
+            std::cout << "Pipe creation failed when adding file to context" << std::endl;
+        #endif
+        return;
+    }
+    
+    // Send the file context to the model in a separate thread
+    std::thread([this, contextPrompt, pipeFd]() {
+        m_currentModelInterface->sendPrompt(pipeFd[1], contextPrompt, "System");
+        close(pipeFd[1]); // Close write end when done
+    }).detach();
+    
+    // Close read end since we don't need the response
+    close(pipeFd[0]);
 }

@@ -18,41 +18,87 @@
 class ModelManager
 {
 public:
-   // Retrieves the singleton instance - Meyers singleton approach
+   /**
+    * @brief Retrieves the singleton instance of the ModelManager
+    * 
+    * @return ModelManager* Pointer to the singleton instance
+    * 
+    * Uses the Meyers singleton approach to ensure thread-safe lazy initialization
+    */
    static ModelManager* getInstance()
    {
       static std::unique_ptr<ModelManager> instance = std::unique_ptr<ModelManager>(new ModelManager);
       return instance.get();
    }
 
-   // Sets the directory of the models
+   /**
+    * @brief Sets the directory path where LLM models are stored
+    * 
+    * @param path The filesystem path to the directory containing the models
+    */
    inline void setModelDirectory(std::string path)
    {
       m_modelsDir = path;
    }
 
-   // Returns the models found in the provided models directory
+   /**
+    * @brief Retrieves a list of all available LLM models in the models directory
+    * 
+    * @return std::expected<std::vector<std::pair<std::string, std::string>>,ModelErrorType>
+    *         Vector of pairs containing model names and sizes on success,
+    *         or ModelErrorType on failure
+    */
    std::expected<std::vector<std::pair<std::string, std::string>>,ModelErrorType> fetchModels();
 
-   // This method will load a model into memory - if not already loaded
+   /**
+    * @brief Loads a specific model into memory if not already loaded
+    * 
+    * @param modelName The name of the model to load
+    * @return std::expected<ModelInterface*,ModelErrorType>
+    *         Pointer to the loaded ModelInterface on success,
+    *         or ModelErrorType on failure
+    */
    std::expected<ModelInterface*,ModelErrorType> loadModel(std::string_view modelName);
 
-   // This method will unload the running model - if any
+   /**
+    * @brief Unloads the currently loaded model if one is active
+    * 
+    * Checks if a model is currently loaded and, if so, unloads it
+    * and resets the m_loadedModel pointer to nullptr
+    */
    void unloadModel();
 
 protected:
    
-   // Default constructor
+   /**
+    * @brief Default constructor for ModelManager
+    * 
+    * Initializes the loaded model pointer to nullptr
+    */
    ModelManager() : m_loadedModel(nullptr)
    {
-      
+      m_modelMap.clear();
+      m_modelsDir = "";
    }
 
 private:
-
-
-   // Prevent cloning
+   /**
+    * @brief Copy constructor (deleted)
+    * 
+    * @param rhs The ModelManager to copy from
+    * 
+    * Deleted to prevent copying of the singleton
+    */
    ModelManager(const ModelManager& rhs) = delete;
+   
+   /**
+    * @brief Assignment operator (deleted)
+    * 
+    * @param rhs The ModelManager to assign from
+    * @return ModelManager& Reference to this ModelManager
+    * 
+    * Deleted to prevent assignment of the singleton
+    */
    ModelManager& operator=(const ModelManager& rhs) = delete;
 
    // Map that maps the name of the LLM to the instance of ModelInterface that
